@@ -1,0 +1,5 @@
+# Large raw extracts: not needed at runtime if o2c_context.db is bundled for /api.
+data/raw
+node_modules
+.git
+dist
