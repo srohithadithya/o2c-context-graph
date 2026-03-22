@@ -1,0 +1,14 @@
+node_modules
+dist
+.venv
+venv
+__pycache__
+*.pyc
+.Python
+.env
+.env.*
+!.env.example
+.vercel
+*.log
+.DS_Store
+o2c_context.db
