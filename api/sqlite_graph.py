@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-NodeType = Literal["order", "payment", "delivery"]
+NodeType = Literal["order", "payment", "delivery", "billing", "master", "entity"]
 
 ORDER_TABLES = (
     "sales_order_headers",
@@ -25,6 +25,24 @@ PAYMENT_TABLES = (
 DELIVERY_TABLES = (
     "outbound_delivery_headers",
     "outbound_delivery_items",
+)
+
+BILLING_TABLES = (
+    "billing_document_cancellations",
+    "billing_document_headers",
+    "billing_document_items",
+)
+
+MASTER_TABLES = (
+    "business_partners",
+    "business_partner_addresses",
+    "customer_company_assignments",
+    "customer_sales_area_assignments",
+    "plants",
+    "products",
+    "product_descriptions",
+    "product_plants",
+    "product_storage_locations",
 )
 
 _FORBIDDEN_SQL = re.compile(
@@ -91,7 +109,7 @@ def run_select(conn: sqlite3.Connection, sql: str, max_rows: int = 500) -> list[
     return out
 
 
-def _table_type(table: str) -> NodeType | None:
+def _table_type(table: str) -> NodeType:
     t = table.lower()
     if t in ORDER_TABLES:
         return "order"
@@ -99,7 +117,11 @@ def _table_type(table: str) -> NodeType | None:
         return "payment"
     if t in DELIVERY_TABLES:
         return "delivery"
-    return None
+    if t in BILLING_TABLES:
+        return "billing"
+    if t in MASTER_TABLES:
+        return "master"
+    return "entity"
 
 
 def _pk_columns(conn: sqlite3.Connection, table: str) -> list[str]:
@@ -124,7 +146,10 @@ def _node_id(table: str, row: sqlite3.Row, conn: sqlite3.Connection) -> str:
     if pks:
         key = "|".join(str(d.get(c, "")) for c in pks)
     else:
-        key = str(row[0])
+        if "_rowid_key" in d:
+            key = str(d["_rowid_key"])
+        else:
+            key = str(row[0])
     safe_table = table.replace(" ", "_")
     return f"{safe_table}:{key}"
 
@@ -158,6 +183,8 @@ def build_graph_payload(
     """
     Build nodes/links for react-force-graph from O2C tables.
     """
+    from .graph_mapping import O2C_JOIN_PATHS
+
     existing = {
         r[0]
         for r in conn.execute(
@@ -165,34 +192,26 @@ def build_graph_payload(
         ).fetchall()
     }
 
-    domain_tables: list[str] = []
-    for group in (ORDER_TABLES, PAYMENT_TABLES, DELIVERY_TABLES):
-        for t in group:
-            if t in existing:
-                domain_tables.append(t)
+    domain_tables = list(existing)
 
     if not domain_tables:
         return {"nodes": [], "links": []}
 
-    per_table = max(1, max_nodes // len(domain_tables))
     nodes: list[dict[str, Any]] = []
     links: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
 
-    sales_order_header_by_so: dict[str, str] = {}
-    outbound_delivery_header_by_doc: dict[str, str] = {}
+    # In-memory storage of rows for fast joining
+    table_data: dict[str, list[tuple[str, dict[str, Any]]]] = {}
 
     for table in domain_tables:
-        ntype = _table_type(table)
-        if ntype is None:
-            continue
+        ntype = _table_type(table) or "entity"
+        table_data[table] = []
         try:
-            cur = conn.execute(f'SELECT * FROM "{table}" LIMIT {per_table}')
+            cur = conn.execute(f'SELECT rowid as _rowid_key, * FROM "{table}"')
         except sqlite3.Error:
             continue
         for row in cur:
-            if len(nodes) >= max_nodes:
-                break
             nid = _node_id(table, row, conn)
             if nid in seen_ids:
                 continue
@@ -204,65 +223,39 @@ def build_graph_payload(
                     "id": nid,
                     "type": ntype,
                     "label": f"{table}: {label}",
-                    "table": table,
+                    "group": ntype,
                 }
             )
+            table_data[table].append((nid, d))
 
-            if table == "sales_order_headers":
-                so = _find_sales_order_value(d)
-                if so:
-                    sales_order_header_by_so[so] = nid
-
-            if table == "outbound_delivery_headers":
-                dv = _find_delivery_doc_value(d)
-                if dv:
-                    outbound_delivery_header_by_doc[dv] = nid
-
-    # Second pass for edges (only when endpoints exist)
-    id_set = {n["id"] for n in nodes}
     seen_links: set[tuple[str, str, str]] = set()
 
-    for table in domain_tables:
-        if table not in ("sales_order_items", "outbound_delivery_items"):
+    for jp in O2C_JOIN_PATHS:
+        if jp.left_table not in table_data or jp.right_table not in table_data:
             continue
-        try:
-            cur = conn.execute(f'SELECT * FROM "{table}" LIMIT {per_table}')
-        except sqlite3.Error:
-            continue
-        for row in cur:
-            child_id = _node_id(table, row, conn)
-            if child_id not in id_set:
-                continue
-            d = dict(row)
-            if table == "sales_order_items":
-                so = _find_sales_order_value(d)
-                if so and so in sales_order_header_by_so:
-                    tgt = sales_order_header_by_so[so]
-                    if tgt in id_set and tgt != child_id:
-                        lk = (child_id, tgt, "order_line")
+        
+        # Build an index on the left table's join keys to speed up matching
+        # Key: tuple of predicate values
+        left_index: dict[tuple[Any, ...], list[str]] = {}
+        for l_nid, l_dict in table_data[jp.left_table]:
+            key = tuple(str(l_dict.get(p.left_column, "")) for p in jp.predicates)
+            # Only index if all keys are present and non-empty/non-None
+            if all(k != "" and k != "None" for k in key):
+                left_index.setdefault(key, []).append(l_nid)
+                
+        # Probe from the right table
+        for r_nid, r_dict in table_data[jp.right_table]:
+            key = tuple(str(r_dict.get(p.right_column, "")) for p in jp.predicates)
+            if key in left_index:
+                for l_nid in left_index[key]:
+                    if l_nid != r_nid:
+                        lk = (l_nid, r_nid, jp.id)
                         if lk not in seen_links:
                             seen_links.add(lk)
-                            links.append(
-                                {
-                                    "source": child_id,
-                                    "target": tgt,
-                                    "label": "order_line",
-                                }
-                            )
-            elif table == "outbound_delivery_items":
-                dv = _find_delivery_doc_value(d)
-                if dv and dv in outbound_delivery_header_by_doc:
-                    tgt = outbound_delivery_header_by_doc[dv]
-                    if tgt in id_set and tgt != child_id:
-                        lk = (child_id, tgt, "delivery_line")
-                        if lk not in seen_links:
-                            seen_links.add(lk)
-                            links.append(
-                                {
-                                    "source": child_id,
-                                    "target": tgt,
-                                    "label": "delivery_line",
-                                }
-                            )
+                            links.append({
+                                "source": l_nid,
+                                "target": r_nid,
+                                "label": jp.id,
+                            })
 
     return {"nodes": nodes, "links": links}
