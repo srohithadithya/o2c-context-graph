@@ -1,5 +1,5 @@
 """
-Dodge AI chat: NL → SQL (Gemini) → SQLite → humanized answer (Gemini).
+Dodge AI chat: NL → SQL (Groq) → SQLite → humanized answer (Groq).
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-import google.generativeai as genai
+from groq import Groq
 
 from .dodge_system import DODGE_SYSTEM_INSTRUCTION
 from .graph_mapping import join_hints_markdown
@@ -25,12 +25,12 @@ from .sqlite_graph import (
 _SQL_JSON_BLOCK = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
 
-def _gemini_api_key() -> str | None:
-    return os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+def _groq_api_key() -> str | None:
+    return os.environ.get("GROQ_API_KEY")
 
 
 def _model_name() -> str:
-    return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    return os.environ.get("GROQ_MODEL", "llama3-70b-8192")
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
@@ -38,54 +38,35 @@ def _parse_json_object(text: str) -> dict[str, Any]:
     m = _SQL_JSON_BLOCK.search(text)
     if m:
         text = m.group(1).strip()
-    return json.loads(text)
-
-
-def _sql_gen_config() -> genai.GenerationConfig:
-    return genai.GenerationConfig(
-        response_mime_type="application/json",
-        response_schema={
-            "type": "object",
-            "properties": {
-                "sql_query": {"type": "string"},
-            },
-            "required": ["sql_query"],
-        },
-    )
-
-
-def _humanize_config() -> genai.GenerationConfig:
-    return genai.GenerationConfig(
-        response_mime_type="application/json",
-        response_schema={
-            "type": "object",
-            "properties": {
-                "answer": {"type": "string"},
-                "nodes_to_highlight": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-            },
-            "required": ["answer", "nodes_to_highlight"],
-        },
-    )
+    try:
+        return json.loads(text)
+    except Exception:
+        return {}
 
 
 def _generate_sql(
-    model: genai.GenerativeModel,
+    client: Groq,
     user_message: str,
     schema_text: str,
 ) -> str:
-    prompt = (
+    system_prompt = (
+        f"{DODGE_SYSTEM_INSTRUCTION}\n\n"
         f"## Database schema (SQLite)\n{schema_text}\n\n"
         "## Instructions\n"
         "Generate a single read-only SELECT query that answers the user's question.\n"
-        "Respond with JSON only matching the schema: {{\"sql_query\": \"...\"}}.\n"
-        "The query must be a single SELECT (no semicolons inside). Use LIMIT when listing rows.\n\n"
-        f"## User question\n{user_message}"
+        "Respond with a JSON object containing a 'sql_query' key: {\"sql_query\": \"...\"}.\n"
+        "The query must be a single SELECT (no semicolons inside)."
     )
-    resp = model.generate_content(prompt, generation_config=_sql_gen_config())
-    text = resp.text or "{}"
+    
+    resp = client.chat.completions.create(
+        model=_model_name(),
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ],
+        response_format={"type": "json_object"},
+    )
+    text = resp.choices[0].message.content or "{}"
     data = _parse_json_object(text)
     q = data.get("sql_query", "")
     if not isinstance(q, str):
@@ -94,7 +75,7 @@ def _generate_sql(
 
 
 def _humanize(
-    model: genai.GenerativeModel,
+    client: Groq,
     user_message: str,
     sql_query: str,
     rows: list[dict[str, Any]],
@@ -104,19 +85,31 @@ def _humanize(
     if len(payload) > max_chars:
         payload = payload[:max_chars] + "\n... [truncated for context]"
 
-    prompt = (
-        "## Conversation\n"
-        f"User question:\n{user_message}\n\n"
-        f"Executed SQL:\n{sql_query}\n\n"
-        f"Result rows (JSON):\n{payload}\n\n"
+    system_prompt = (
+        f"{DODGE_SYSTEM_INSTRUCTION}\n\n"
         "## Instructions\n"
         "Write a clear, professional answer for a finance/O2C user.\n"
-        "Return JSON only: {\"answer\": \"...\", \"nodes_to_highlight\": [\"node_id\", ...]}.\n"
+        "Respond with a JSON object containing keys: 'answer' (string) and 'nodes_to_highlight' (array of strings).\n"
         "Use exact graph node ids (e.g. table:key) when referencing documents that should glow in the UI; "
         "use an empty array if none apply."
     )
-    resp = model.generate_content(prompt, generation_config=_humanize_config())
-    text = resp.text or "{}"
+    
+    user_prompt = (
+        "## Conversation\n"
+        f"User question:\n{user_message}\n\n"
+        f"Executed SQL:\n{sql_query}\n\n"
+        f"Result rows (JSON):\n{payload}"
+    )
+
+    resp = client.chat.completions.create(
+        model=_model_name(),
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        response_format={"type": "json_object"},
+    )
+    text = resp.choices[0].message.content or "{}"
     data = _parse_json_object(text)
     answer = str(data.get("answer", ""))
     raw_nodes = data.get("nodes_to_highlight", [])
@@ -131,15 +124,11 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
     """
     Returns { response, sql_query, nodes_to_highlight }.
     """
-    key = _gemini_api_key()
+    key = _groq_api_key()
     if not key:
-        raise RuntimeError("Set GEMINI_API_KEY or GOOGLE_API_KEY")
+        raise RuntimeError("Set GROQ_API_KEY")
 
-    genai.configure(api_key=key)
-    model = genai.GenerativeModel(
-        model_name=_model_name(),
-        system_instruction=DODGE_SYSTEM_INSTRUCTION,
-    )
+    client = Groq(api_key=key)
 
     db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
     if not db_path.is_file():
@@ -161,7 +150,7 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
             + join_hints_markdown()
         )
         try:
-            sql_query = _generate_sql(model, user_message, schema_text)
+            sql_query = _generate_sql(client, user_message, schema_text)
         except Exception as e:  # noqa: BLE001 — surface model/parse errors as answer
             return {
                 "response": f"I could not generate a valid SQL query: {e}",
@@ -186,7 +175,7 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
             }
 
         try:
-            answer, nodes = _humanize(model, user_message, sql_query, rows)
+            answer, nodes = _humanize(client, user_message, sql_query, rows)
         except Exception as e:  # noqa: BLE001
             return {
                 "response": f"Could not format the answer: {e}. Raw row count: {len(rows)}.",
