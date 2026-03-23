@@ -1,4 +1,4 @@
-import ForceGraph2D from "react-force-graph-2d";
+import ForceGraph2D, { ForceGraphMethods } from "react-force-graph-2d";
 import type { RefObject } from "react";
 import {
   useCallback,
@@ -8,13 +8,14 @@ import {
   useState,
 } from "react";
 
-type NodeKind = "order" | "payment" | "delivery";
+type NodeKind = "order" | "payment" | "delivery" | "billing" | "master" | "entity";
 
 interface GraphNode {
   id: string;
   type: NodeKind;
   label: string;
   table?: string;
+  group?: string; // added group as asked
 }
 
 interface GraphLink {
@@ -35,11 +36,23 @@ interface ChatApiResponse {
   nodes_to_highlight: string[];
 }
 
-const TYPE_COLOR: Record<NodeKind, string> = {
-  order: "#3b82f6",
-  payment: "#22c55e",
-  delivery: "#ef4444",
+const TYPE_COLOR: Record<string, string> = {
+  order: "#3b82f6",     // blue
+  payment: "#10b981",   // emerald
+  delivery: "#ef4444",  // red
+  billing: "#a855f7",   // purple
+  master: "#f59e0b",    // amber
+  entity: "#64748b",    // slate fallback
 };
+
+const LEGEND_TYPES = [
+  { id: "order", label: "Orders", color: "bg-blue-500" },
+  { id: "payment", label: "Payments", color: "bg-emerald-500" },
+  { id: "delivery", label: "Deliveries", color: "bg-red-500" },
+  { id: "billing", label: "Billing", color: "bg-purple-500" },
+  { id: "master", label: "Masters", color: "bg-amber-500" },
+  { id: "entity", label: "Other", color: "bg-slate-500" },
+];
 
 type ChatMessage =
   | { role: "user"; content: string }
@@ -47,33 +60,52 @@ type ChatMessage =
       role: "assistant";
       content: string;
       sql_query?: string;
+    }
+  | {
+      role: "system";
+      content: string;
     };
 
 function useResizeObserver(ref: RefObject<HTMLElement | null>) {
   const [size, setSize] = useState({ width: 600, height: 500 });
-
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-
     const measure = () => {
       const { clientWidth, clientHeight } = el;
       if (clientWidth > 0 && clientHeight > 0) {
-        setSize({ width: clientWidth, clientHeight });
+        setSize({ width: clientWidth, height: clientHeight });
       }
     };
-
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
   }, [ref]);
-
   return size;
+}
+
+function renderFormattedText(text: string) {
+  return text.split("\n").map((line, i) => {
+    let safeLine = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    let html = safeLine.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/`([^`]+)`/g, '<code class="bg-black/10 px-1 py-0.5 rounded text-[11px] font-mono">$1</code>');
+    
+    if (html.trim().startsWith('- ') || html.trim().startsWith('* ')) {
+      return <li key={i} className="ml-5 mb-1 list-disc" dangerouslySetInnerHTML={{ __html: html.trim().substring(2) }} />;
+    }
+    const match = html.trim().match(/^(\d+\.)\s(.*)/);
+    if (match) {
+      return <li key={i} className="ml-5 mb-1 list-decimal" dangerouslySetInnerHTML={{ __html: match[2] }} />;
+    }
+    if (html.trim() === "") return <div key={i} className="h-2" />;
+    return <p key={i} className="mb-1 last:mb-0" dangerouslySetInnerHTML={{ __html: html }} />;
+  });
 }
 
 export default function App() {
   const graphWrapRef = useRef<HTMLDivElement>(null);
+  const fgRef = useRef<any>(null);
   const graphSize = useResizeObserver(graphWrapRef);
 
   const [rawNodes, setRawNodes] = useState<GraphNode[]>([]);
@@ -85,14 +117,43 @@ export default function App() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [highlightIds, setHighlightIds] = useState<string[]>([]);
-
-  const graphData = useMemo(
-    () => ({
-      nodes: rawNodes.map((n) => ({ ...n })),
-      links: rawLinks.map((l) => ({ ...l })),
-    }),
-    [rawNodes, rawLinks],
+  
+  const [loadedMetadata, setLoadedMetadata] = useState<any>(null);
+  const [hoverNode, setHoverNode] = useState<string | null>(null);
+  const [visibleTypes, setVisibleTypes] = useState<Set<string>>(
+    new Set(["order", "payment", "delivery", "billing"]) // Master & Entity hidden by default for simplicity!
   );
+
+  const neighbors = useMemo(() => {
+    if (!hoverNode) return { nodes: new Set<string>(), links: new Set<string>() };
+    const n = new Set<string>();
+    const l = new Set<string>();
+    n.add(hoverNode);
+    for (const link of rawLinks) {
+      const src = typeof link.source === "object" ? (link.source as any).id : link.source;
+      const tgt = typeof link.target === "object" ? (link.target as any).id : link.target;
+      if (src === hoverNode || tgt === hoverNode) {
+        n.add(src);
+        n.add(tgt);
+        l.add(`${src}-${tgt}`);
+      }
+    }
+    return { nodes: n, links: l };
+  }, [hoverNode, rawLinks]);
+
+  const graphData = useMemo(() => {
+    const filteredNodes = rawNodes.filter(n => visibleTypes.has(n.group || n.type));
+    const validIds = new Set(filteredNodes.map(n => n.id));
+    const filteredLinks = rawLinks.filter(l => {
+      const srcId = typeof l.source === 'object' ? (l.source as any).id : l.source;
+      const tgtId = typeof l.target === 'object' ? (l.target as any).id : l.target;
+      return validIds.has(srcId) && validIds.has(tgtId);
+    });
+    return {
+      nodes: filteredNodes.map(n => ({ ...n })),
+      links: filteredLinks.map(l => ({ ...l })),
+    };
+  }, [rawNodes, rawLinks, visibleTypes]);
 
   const highlightSet = useMemo(
     () => new Set(highlightIds),
@@ -102,12 +163,36 @@ export default function App() {
   const nodeColor = useCallback(
     (node: GraphNode) => {
       const id = String(node.id);
-      if (highlightSet.has(id)) return "#facc15";
-      const t = node.type in TYPE_COLOR ? node.type : "order";
-      return TYPE_COLOR[t];
+      if (highlightSet.has(id)) return "#fbbf24";
+      
+      const isNeighbor = hoverNode ? neighbors.nodes.has(id) : true;
+      const t = node.group || node.type;
+      const baseColor = TYPE_COLOR[t] || TYPE_COLOR.entity;
+      
+      if (hoverNode && !isNeighbor) {
+        return "rgba(203, 213, 225, 0.4)"; // dim slate-300
+      }
+      return baseColor;
     },
-    [highlightSet],
+    [highlightSet, hoverNode, neighbors],
   );
+
+  const linkColor = useCallback((link: any) => {
+    const src = typeof link.source === 'object' ? link.source.id : link.source;
+    const tgt = typeof link.target === 'object' ? link.target.id : link.target;
+    if (hoverNode) {
+      if (neighbors.links.has(`${src}-${tgt}`)) return "rgba(99, 102, 241, 0.9)"; // bright indigo
+      return "rgba(226, 232, 240, 0.2)"; // transparent
+    }
+    return "rgba(148, 163, 184, 0.4)";
+  }, [hoverNode, neighbors]);
+
+  const linkWidth = useCallback((link: any) => {
+    const src = typeof link.source === 'object' ? link.source.id : link.source;
+    const tgt = typeof link.target === 'object' ? link.target.id : link.target;
+    if (hoverNode && neighbors.links.has(`${src}-${tgt}`)) return 2;
+    return 0.8;
+  }, [hoverNode, neighbors]);
 
   const nodeVal = useCallback(
     (node: GraphNode) => (highlightSet.has(String(node.id)) ? 5 : 2),
@@ -115,7 +200,21 @@ export default function App() {
   );
 
   const onNodeClick = useCallback((node: GraphNode) => {
-    setInput(`Analyze ${node.id}`);
+    (async () => {
+      try {
+        const r = await fetch(`/api/node/${encodeURIComponent(node.id)}`);
+        if (r.ok) {
+          const details = await r.json();
+          // We can set a local dialog/modal or system message
+          setLoadedMetadata(details);
+          setInput(`Analyze details for ${node.id}`);
+        } else {
+          setInput(`Analyze ${node.id}`);
+        }
+      } catch (e) {
+        setInput(`Analyze ${node.id}`);
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -145,6 +244,16 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    // Improve visual compactness to prevent "very long" stringy graphs
+    if (fgRef.current && graphData.nodes.length > 0) {
+      const charge = fgRef.current.d3Force("charge");
+      if (charge) charge.distanceMax(300);
+      const center = fgRef.current.d3Force("center");
+      if (center) center.strength(0.04);
+    }
+  }, [graphData]);
+
   const sendMessage = async () => {
     const text = input.trim();
     if (!text || sending) return;
@@ -173,7 +282,19 @@ export default function App() {
         return;
       }
 
-      setHighlightIds(payload.nodes_to_highlight ?? []);
+      const highlights = payload.nodes_to_highlight ?? [];
+      setHighlightIds(highlights);
+      if (highlights.length > 0) {
+        const hTypes = new Set(rawNodes.filter(n => highlights.includes(String(n.id))).map(n => n.group || n.type));
+        if (hTypes.size > 0) {
+          setVisibleTypes(prev => {
+            const next = new Set(prev);
+            hTypes.forEach(t => next.add(t as string));
+            return next;
+          });
+        }
+      }
+      
       setMessages((m) => [
         ...m,
         {
@@ -197,60 +318,75 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen min-h-0 flex-col bg-[#0b0f14] text-slate-100">
-      <header className="flex shrink-0 items-center justify-between border-b border-slate-800/90 bg-[#0d1117] px-5 py-3">
+    <div className="flex h-screen min-h-0 flex-col bg-white text-slate-900 font-sans">
+      <header className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50 px-5 py-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
             Order-to-Cash
           </p>
-          <h1 className="text-lg font-semibold tracking-tight text-slate-100">
+          <h1 className="text-lg font-semibold tracking-tight text-slate-800">
             Context Graph
           </h1>
         </div>
-        <div className="text-right text-xs text-slate-500">
-          <span className="font-mono text-slate-400">
-            {rawNodes.length} nodes
-          </span>
-          <span className="mx-2 text-slate-700">·</span>
-          <span className="font-mono text-slate-400">
-            {rawLinks.length} links
-          </span>
+        <div className="flex gap-4 items-center text-xs text-slate-500">
+          <div>
+            <span className="font-mono text-slate-600 font-medium">{rawNodes.length}</span> nodes
+            <span className="mx-2 text-slate-300">·</span>
+            <span className="font-mono text-slate-600 font-medium">{rawLinks.length}</span> links
+          </div>
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
         {/* Left: force graph */}
-        <section className="relative flex min-w-0 flex-1 flex-col border-r border-slate-800/90 bg-[#070a0e]">
-          <div className="flex items-center justify-between border-b border-slate-800/80 px-4 py-2">
-            <span className="text-xs font-medium text-slate-400">
-              O2C graph
+        <section className="relative flex min-w-0 flex-1 flex-col border-r border-slate-200 bg-white shadow-lg z-10">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2 bg-slate-50/50">
+            <span className="text-xs font-semibold text-slate-600">
+              O2C Graph
             </span>
-            <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-slate-500">
-              <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-blue-500" />
-                Orders
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                Payments
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-red-500" />
-                Deliveries
-              </span>
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => fgRef.current?.zoomToFit(400, 20)}
+                className="px-2 py-1 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                Zoom to Fit
+              </button>
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold">
+                {LEGEND_TYPES.map(t => {
+                  const active = visibleTypes.has(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        const next = new Set(visibleTypes);
+                        if (next.has(t.id)) next.delete(t.id);
+                        else next.add(t.id);
+                        setVisibleTypes(next);
+                      }}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${
+                        active 
+                          ? "text-slate-700 bg-white border border-slate-200 shadow-sm" 
+                          : "text-slate-400 bg-transparent hover:bg-slate-100 hover:text-slate-500"
+                      }`}
+                    >
+                      <span className={`h-2 w-2 rounded-full ${t.color} ${active ? 'shadow-sm' : 'opacity-40 grayscale-[50%]'}`} />
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
-          <div
-            ref={graphWrapRef}
-            className="relative min-h-0 flex-1 w-full"
-          >
+          <div ref={graphWrapRef} className="relative min-h-0 flex-1 w-full">
             {graphLoading ? (
-              <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                Loading graph…
+              <div className="flex h-full items-center justify-center text-sm font-medium text-slate-400">
+                <Spinner />
+                <span className="ml-2">Loading graph…</span>
               </div>
             ) : (
               <ForceGraph2D
+                ref={fgRef as any}
                 width={graphSize.width}
                 height={graphSize.height}
                 graphData={graphData}
@@ -258,78 +394,115 @@ export default function App() {
                 nodeLabel="label"
                 nodeColor={nodeColor}
                 nodeVal={nodeVal}
-                linkColor={() => "rgba(148, 163, 184, 0.35)"}
-                linkWidth={0.6}
-                backgroundColor="#070a0e"
+                linkColor={linkColor}
+                linkWidth={linkWidth}
+                backgroundColor="#ffffff"
                 cooldownTicks={120}
                 d3AlphaDecay={0.02}
                 d3VelocityDecay={0.35}
                 enableNodeDrag
                 onNodeClick={onNodeClick}
+                onNodeHover={(node: any) => setHoverNode(node ? String(node.id) : null)}
               />
             )}
           </div>
 
           {graphWarning && (
-            <p className="border-t border-amber-900/40 bg-amber-950/30 px-4 py-2 text-xs text-amber-200/90">
+            <p className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs font-medium text-amber-800">
               {graphWarning}
             </p>
+          )}
+
+          {loadedMetadata && (
+            <div className="absolute bottom-4 left-4 max-w-sm max-h-64 overflow-auto bg-white border border-slate-200 shadow-xl rounded-xl p-4 text-xs z-20">
+              <div className="flex justify-between items-center mb-2">
+                <h3 className="font-semibold text-slate-800">Node Metadata</h3>
+                <button onClick={() => setLoadedMetadata(null)} className="text-slate-400 hover:text-slate-600">×</button>
+              </div>
+              <p className="text-[10px] text-slate-500 mb-2 font-mono">{loadedMetadata.id}</p>
+              <pre className="text-[10px] bg-slate-50 p-2 rounded border border-slate-100 overflow-x-auto text-slate-700">
+                {JSON.stringify(loadedMetadata.data, null, 2)}
+              </pre>
+            </div>
           )}
         </section>
 
         {/* Right: Dodge AI */}
-        <aside className="flex w-full max-w-md shrink-0 flex-col border-l border-slate-800/90 bg-[#0d1117]">
-          <div className="border-b border-slate-800/90 px-5 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-indigo-400/90">
-              Assistant
-            </p>
-            <h2 className="mt-1 text-xl font-semibold tracking-tight text-white">
-              Dodge AI
-            </h2>
-            <p className="mt-1 text-xs leading-relaxed text-slate-500">
-              Ask in natural language. Answers use live SQL on{" "}
-              <code className="rounded bg-slate-800/80 px-1 py-0.5 font-mono text-[11px] text-slate-300">
-                o2c_context.db
-              </code>{" "}
-              and may highlight nodes in the graph.
-            </p>
+        <aside className="flex w-full max-w-md shrink-0 flex-col bg-slate-50 z-0">
+          <div className="border-b border-slate-200 px-5 py-4 bg-white flex justify-between items-start">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-500">
+                Assistant
+              </p>
+              <h2 className="mt-1 text-xl font-bold tracking-tight text-slate-900">
+                Dodge AI
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                Ask in natural language. Answers use live SQL on{" "}
+                <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] text-slate-600 font-medium border border-slate-200">
+                  o2c_context.db
+                </code>{" "}
+                and may highlight nodes in the graph.
+              </p>
+            </div>
+            <button 
+              onClick={() => { setMessages([]); setHighlightIds([]); setLoadedMetadata(null); }}
+              className="text-xs font-medium text-slate-500 hover:text-red-500 transition-colors bg-slate-100 hover:bg-red-50 px-2 py-1 rounded"
+            >
+              Clear Chat
+            </button>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-4 pb-4 pt-2">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto rounded-xl border border-slate-800/80 bg-[#0b0f14] p-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-4 pb-4 pt-4">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-inner p-4">
               {messages.length === 0 && (
-                <p className="text-sm leading-relaxed text-slate-500">
-                  Try: “How many sales order headers do we have?” or click a
-                  graph node to analyze it.
-                </p>
+                <div className="flex flex-col items-center justify-center h-full text-center text-slate-400 space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-300">
+                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                  </div>
+                  <p className="text-sm font-medium">Try: “How many sales order headers do we have?”</p>
+                  <p className="text-xs">Or click a graph node to load metadata and analyze it.</p>
+                </div>
               )}
               {messages.map((msg, i) => (
                 <div
                   key={i}
-                  className={
-                    msg.role === "user"
-                      ? "ml-6 rounded-lg border border-slate-700/80 bg-slate-800/50 px-3 py-2 text-sm text-slate-100"
-                      : "mr-4 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2 text-sm text-slate-200"
-                  }
+                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                 >
-                  <p className="whitespace-pre-wrap leading-relaxed">
-                    {msg.content}
-                  </p>
-                  {msg.role === "assistant" && msg.sql_query ? (
-                    <details className="mt-3 border-t border-slate-800 pt-2">
-                      <summary className="cursor-pointer text-[11px] font-medium text-slate-500 hover:text-slate-400">
-                        SQL
-                      </summary>
-                      <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-black/40 p-2 font-mono text-[11px] text-emerald-300/90">
-                        {msg.sql_query}
-                      </pre>
-                    </details>
-                  ) : null}
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-[13px] leading-relaxed shadow-sm ${
+                      msg.role === "user"
+                        ? "bg-blue-600 text-white rounded-br-sm"
+                        : "bg-slate-200 text-slate-900 rounded-bl-sm"
+                    }`}
+                  >
+                    <div className="text-[13px] leading-relaxed">
+                      {renderFormattedText(msg.content)}
+                    </div>
+                    {msg.role === "assistant" && msg.sql_query ? (
+                      <details className={`mt-3 border-t pt-2 border-slate-300`}>
+                        <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider opacity-70 hover:opacity-100 transition-opacity">
+                          SQL Query
+                        </summary>
+                        <pre className="mt-2 max-h-40 overflow-auto rounded text-left bg-slate-800 p-2 font-mono text-[10px] text-emerald-400 shadow-inner">
+                          {msg.sql_query}
+                        </pre>
+                      </details>
+                    ) : null}
+                  </div>
                 </div>
               ))}
+              {sending && (
+                <div className="flex justify-start">
+                  <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-slate-200 px-4 py-3 text-[13px] text-slate-900 shadow-sm flex items-center gap-2">
+                    <Spinner className="w-3.5 h-3.5 border-slate-400 border-t-slate-600" />
+                    <span className="font-medium text-slate-500 animate-pulse">Generating answer...</span>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="shrink-0 space-y-2">
+            <div className="shrink-0 space-y-2 mt-2">
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -341,22 +514,30 @@ export default function App() {
                 }}
                 rows={3}
                 placeholder="Ask Dodge AI…"
-                className="w-full resize-none rounded-xl border border-slate-700 bg-[#0b0f14] px-3 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:border-indigo-500/50 focus:outline-none focus:ring-1 focus:ring-indigo-500/30"
+                className="w-full resize-none rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 shadow-sm transition-all"
               />
-              <div className="flex justify-end">
+              <div className="flex justify-end pt-1">
                 <button
                   type="button"
-                  disabled={sending}
+                  disabled={sending || !input.trim()}
                   onClick={() => void sendMessage()}
-                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500 disabled:opacity-50"
+                  className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md transition-all hover:bg-blue-700 hover:shadow-lg disabled:opacity-50 disabled:shadow-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
                 >
-                  {sending ? "Thinking…" : "Send"}
+                  Send
                 </button>
               </div>
             </div>
           </div>
         </aside>
       </div>
+    </div>
+  );
+}
+
+function Spinner({ className }: { className?: string }) {
+  return (
+    <div className={`inline-block h-4 w-4 animate-spin rounded-full border-2 border-solid border-current border-e-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite] ${className || 'text-indigo-600'}`} role="status">
+      <span className="!absolute !-m-px !h-px !w-px !overflow-hidden !whitespace-nowrap !border-0 !p-0 ![clip:rect(0,0,0,0)]">Loading...</span>
     </div>
   );
 }

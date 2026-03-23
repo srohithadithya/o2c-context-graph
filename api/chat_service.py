@@ -30,7 +30,7 @@ def _groq_api_key() -> str | None:
 
 
 def _model_name() -> str:
-    return os.environ.get("GROQ_MODEL", "llama3-70b-8192")
+    return os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:

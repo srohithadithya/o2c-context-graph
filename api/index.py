@@ -159,8 +159,47 @@ def graph_join_rules() -> dict[str, Any]:
     return {"join_paths": join_paths_as_dicts()}
 
 
+@app.get("/api/node/{node_id}")
+def get_node_details(node_id: str) -> dict[str, Any]:
+    """Fetch full details for a node."""
+    if ":" not in node_id:
+        raise HTTPException(status_code=400, detail="Invalid node ID format")
+    
+    table, key_str = node_id.split(":", 1)
+    
+    from .sqlite_graph import _pk_columns
+    db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
+    if not db_path.is_file():
+        raise HTTPException(status_code=404, detail="DB not found")
+        
+    with get_connection(db_path) as conn:
+        existing = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+        if table not in existing:
+            raise HTTPException(status_code=404, detail="Table not found")
+            
+        pks = _pk_columns(conn, table)
+        if not pks:
+            cur = conn.execute(f'SELECT rowid as _rowid_key, * FROM "{table}" WHERE rowid = ?', (key_str,))
+        else:
+            keys = key_str.split("|")
+            if len(keys) != len(pks):
+                raise HTTPException(status_code=400, detail="Mismatched PK elements")
+            conds = " AND ".join(f'"{c}" = ?' for c in pks)
+            cur = conn.execute(f'SELECT * FROM "{table}" WHERE {conds}', keys)
+            
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Node data not found")
+            
+        return {"id": node_id, "table": table, "data": dict(row)}
+
+
 # ---------------------------------------------------------------------------
-# Chat — Gemini (Antigravity) + SQLite
+# Chat — Groq SQLite
 # ---------------------------------------------------------------------------
 
 
@@ -169,8 +208,8 @@ def chat(req: ChatRequest) -> ChatResponse:
     """
     POST body: ``{ "message": "..." }``.
 
-    Calls **Google Gemini** (``google-generativeai``; set ``GEMINI_API_KEY`` / ``GOOGLE_API_KEY``)
-    to generate SQL, runs it on ``o2c_context.db``, then Gemini again to humanize the reply.
+    Calls **Groq** (``groq``; set ``GROQ_API_KEY``)
+    to generate SQL, runs it on ``o2c_context.db``, then Groq again to humanize the reply.
     """
     try:
         out = run_dodge_chat(req.message)
