@@ -45,12 +45,15 @@ const TYPE_COLOR: Record<string, string> = {
   entity: "#64748b",    // slate fallback
 };
 
-const LEGEND_TYPES = [
+const CORE_TYPES = [
   { id: "order", label: "Orders", color: "bg-blue-500" },
-  { id: "payment", label: "Payments", color: "bg-emerald-500" },
   { id: "delivery", label: "Deliveries", color: "bg-red-500" },
   { id: "billing", label: "Billing", color: "bg-purple-500" },
-  { id: "master", label: "Masters", color: "bg-amber-500" },
+  { id: "payment", label: "Payments", color: "bg-emerald-500" },
+];
+
+const CONTEXT_TYPES = [
+  { id: "master", label: "Master Data", color: "bg-amber-500" },
   { id: "entity", label: "Other", color: "bg-slate-500" },
 ];
 
@@ -160,44 +163,46 @@ export default function App() {
     [highlightIds],
   );
 
-  const nodeColor = useCallback(
-    (node: GraphNode) => {
-      const id = String(node.id);
-      if (highlightSet.has(id)) return "#fbbf24";
-      
-      const isNeighbor = hoverNode ? neighbors.nodes.has(id) : true;
-      const t = node.group || node.type;
-      const baseColor = TYPE_COLOR[t] || TYPE_COLOR.entity;
-      
-      if (hoverNode && !isNeighbor) {
-        return "rgba(203, 213, 225, 0.4)"; // dim slate-300
-      }
-      return baseColor;
-    },
-    [highlightSet, hoverNode, neighbors],
-  );
+  const nodeCanvasObject = useCallback((node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    const id = String(node.id);
+    const isHighlighted = highlightSet.has(id);
+    const isHovered = hoverNode === id;
+    const isNeighbor = hoverNode ? neighbors.nodes.has(id) : true;
 
-  const linkColor = useCallback((link: any) => {
-    const src = typeof link.source === 'object' ? link.source.id : link.source;
-    const tgt = typeof link.target === 'object' ? link.target.id : link.target;
-    if (hoverNode) {
-      if (neighbors.links.has(`${src}-${tgt}`)) return "rgba(99, 102, 241, 0.9)"; // bright indigo
-      return "rgba(226, 232, 240, 0.2)"; // transparent
+    const t = node.group || node.type;
+    const baseColor = TYPE_COLOR[t] || TYPE_COLOR.entity;
+    const color = (hoverNode && !isNeighbor) ? "rgba(203, 213, 225, 0.4)" : baseColor;
+    
+    const size = isHighlighted || isHovered ? 6 : 4;
+    
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
+    ctx.fillStyle = color;
+    ctx.fill();
+    
+    if (isHighlighted || isHovered) {
+      ctx.lineWidth = 1.5 / globalScale;
+      ctx.strokeStyle = '#334155';
+      ctx.stroke();
     }
-    return "rgba(148, 163, 184, 0.4)";
-  }, [hoverNode, neighbors]);
-
-  const linkWidth = useCallback((link: any) => {
-    const src = typeof link.source === 'object' ? link.source.id : link.source;
-    const tgt = typeof link.target === 'object' ? link.target.id : link.target;
-    if (hoverNode && neighbors.links.has(`${src}-${tgt}`)) return 2;
-    return 0.8;
-  }, [hoverNode, neighbors]);
-
-  const nodeVal = useCallback(
-    (node: GraphNode) => (highlightSet.has(String(node.id)) ? 5 : 2),
-    [highlightSet],
-  );
+    
+    if (isHovered || isHighlighted) {
+      const fontSize = Math.max(12 / globalScale, 2);
+      ctx.font = `500 ${fontSize}px Sans-Serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = isHovered ? '#0f172a' : '#334155';
+      
+      // Soft background to text to make it readable in dense graphs
+      const textWidth = ctx.measureText(node.label).width;
+      const bky = node.y + size + Math.max(2 / globalScale, 1);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.fillRect(node.x - textWidth/2 - 2/globalScale, bky - 1/globalScale, textWidth + 4/globalScale, fontSize + 2/globalScale);
+      
+      ctx.fillStyle = isHovered ? '#0f172a' : '#334155';
+      ctx.fillText(node.label, node.x, bky);
+    }
+  }, [highlightSet, hoverNode, neighbors]);
 
   const onNodeClick = useCallback((node: GraphNode) => {
     (async () => {
@@ -340,19 +345,23 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         {/* Left: force graph */}
         <section className="relative flex min-w-0 flex-1 flex-col border-r border-slate-200 bg-white shadow-lg z-10">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2 bg-slate-50/50">
-            <span className="text-xs font-semibold text-slate-600">
-              O2C Graph
-            </span>
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col gap-2 relative z-10 w-full px-5 py-3 border-b border-slate-200 bg-white/90 backdrop-blur shadow-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 tracking-wider uppercase">
+                Interactive Map
+              </span>
               <button 
                 onClick={() => fgRef.current?.zoomToFit(400, 20)}
-                className="px-2 py-1 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors shadow-sm"
+                className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-600 bg-white border border-slate-300 rounded hover:bg-slate-50 transition-colors shadow-sm"
               >
                 Zoom to Fit
               </button>
-              <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold">
-                {LEGEND_TYPES.map(t => {
+            </div>
+            
+            <div className="flex items-center justify-between mt-1">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold">
+                <span className="text-slate-400 mr-1 hidden sm:inline-block">Core Flow:</span>
+                {CORE_TYPES.map(t => {
                   const active = visibleTypes.has(t.id);
                   return (
                     <button
@@ -363,13 +372,39 @@ export default function App() {
                         else next.add(t.id);
                         setVisibleTypes(next);
                       }}
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-all ${
                         active 
-                          ? "text-slate-700 bg-white border border-slate-200 shadow-sm" 
-                          : "text-slate-400 bg-transparent hover:bg-slate-100 hover:text-slate-500"
+                          ? "text-slate-800 bg-slate-100 border border-slate-300 shadow-sm" 
+                          : "text-slate-400 bg-transparent hover:bg-slate-50 border border-transparent"
                       }`}
                     >
-                      <span className={`h-2 w-2 rounded-full ${t.color} ${active ? 'shadow-sm' : 'opacity-40 grayscale-[50%]'}`} />
+                      <span className={`h-2 w-2 rounded-full ${t.color} ${active ? 'shadow-sm' : 'opacity-40 grayscale'}`} />
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+              
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold border-l border-slate-200 pl-3">
+                <span className="text-amber-600/70 mr-1 hidden sm:inline-block">Extended Context:</span>
+                {CONTEXT_TYPES.map(t => {
+                  const active = visibleTypes.has(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        const next = new Set(visibleTypes);
+                        if (next.has(t.id)) next.delete(t.id);
+                        else next.add(t.id);
+                        setVisibleTypes(next);
+                      }}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-all ${
+                        active 
+                          ? "text-slate-800 bg-amber-50 border border-amber-200 shadow-sm" 
+                          : "text-slate-400 bg-transparent hover:bg-slate-50 border border-transparent"
+                      }`}
+                    >
+                      <span className={`h-2 w-2 rounded-full ${t.color} ${active ? 'shadow-sm' : 'opacity-40 grayscale'}`} />
                       {t.label}
                     </button>
                   );
@@ -391,11 +426,28 @@ export default function App() {
                 height={graphSize.height}
                 graphData={graphData}
                 nodeId="id"
-                nodeLabel="label"
-                nodeColor={nodeColor}
-                nodeVal={nodeVal}
-                linkColor={linkColor}
-                linkWidth={linkWidth}
+                nodeCanvasObject={nodeCanvasObject}
+                linkColor={(link: any) => {
+                  const src = typeof link.source === 'object' ? link.source.id : link.source;
+                  const tgt = typeof link.target === 'object' ? link.target.id : link.target;
+                  if (hoverNode) {
+                    if (neighbors.links.has(`${src}-${tgt}`)) return "rgba(99, 102, 241, 0.9)";
+                    return "rgba(226, 232, 240, 0.1)";
+                  }
+                  return "rgba(148, 163, 184, 0.35)";
+                }}
+                linkWidth={(link: any) => {
+                  const src = typeof link.source === 'object' ? link.source.id : link.source;
+                  const tgt = typeof link.target === 'object' ? link.target.id : link.target;
+                  if (hoverNode && neighbors.links.has(`${src}-${tgt}`)) return 2;
+                  return 0.8;
+                }}
+                linkDirectionalParticles={1}
+                linkDirectionalParticleWidth={(link: any) => {
+                  const src = typeof link.source === 'object' ? link.source.id : link.source;
+                  const tgt = typeof link.target === 'object' ? link.target.id : link.target;
+                  return (hoverNode && neighbors.links.has(`${src}-${tgt}`)) ? 3 : 0;
+                }}
                 backgroundColor="#ffffff"
                 cooldownTicks={120}
                 d3AlphaDecay={0.02}
