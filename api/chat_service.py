@@ -123,6 +123,18 @@ def _humanize(
     return answer, nodes
 
 
+def _handle_api_error(e: Exception) -> str:
+    err_str = str(e).lower()
+    if "429" in err_str or "rate limit" in err_str or "too many requests" in err_str or "tokens" in err_str:
+        import re
+        m = re.search(r"try again in\s*([\d\.]+\s*(?:s|m|seconds|minutes|ms))", err_str)
+        wait_time = m.group(1) if m else "60 seconds"
+        return f"The AI analysis engine is currently experiencing high traffic or rate limits. Please wait **{wait_time}** and try again."
+    if "timeout" in err_str or "connection" in err_str:
+        return "The connection to the AI engine timed out. Please verify your connection or try again."
+    return f"I encountered an unexpected API error: {e}"
+
+
 def run_dodge_chat(user_message: str) -> dict[str, Any]:
     """
     Returns { response, sql_query, nodes_to_highlight }.
@@ -156,7 +168,7 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
             sql_query, direct_answer = _generate_sql(client, user_message, schema_text)
         except Exception as e:  # noqa: BLE001 — surface model/parse errors as answer
             return {
-                "response": f"I could not generate a valid SQL query: {e}",
+                "response": _handle_api_error(e),
                 "sql_query": "",
                 "nodes_to_highlight": [],
             }
@@ -188,7 +200,7 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
             answer, nodes = _humanize(client, user_message, sql_query, rows)
         except Exception as e:  # noqa: BLE001
             return {
-                "response": f"Could not format the answer: {e}. Raw row count: {len(rows)}.",
+                "response": _handle_api_error(e),
                 "sql_query": sql_query,
                 "nodes_to_highlight": [],
             }

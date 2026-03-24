@@ -466,15 +466,29 @@ export default function App() {
           )}
 
           {loadedMetadata && (
-            <div className="absolute bottom-4 left-4 max-w-sm max-h-64 overflow-auto bg-white border border-slate-200 shadow-xl rounded-xl p-4 text-xs z-20">
-              <div className="flex justify-between items-center mb-2">
-                <h3 className="font-semibold text-slate-800">Node Metadata</h3>
-                <button onClick={() => setLoadedMetadata(null)} className="text-slate-400 hover:text-slate-600">×</button>
+            <div className="absolute bottom-4 left-4 max-w-sm w-full bg-white border border-slate-200 shadow-xl rounded-xl p-4 text-xs z-20">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="font-bold text-slate-800 tracking-tight">O2C Document Record</h3>
+                <button onClick={() => setLoadedMetadata(null)} className="text-slate-400 hover:text-red-500 font-bold px-2 py-0.5 rounded hover:bg-red-50 transition-colors">✕</button>
               </div>
-              <p className="text-[10px] text-slate-500 mb-2 font-mono">{loadedMetadata.id}</p>
-              <pre className="text-[10px] bg-slate-50 p-2 rounded border border-slate-100 overflow-x-auto text-slate-700">
-                {JSON.stringify(loadedMetadata.data, null, 2)}
-              </pre>
+              <p className="text-[10px] uppercase font-bold tracking-wider text-indigo-500 mb-2 truncate" title={loadedMetadata.id}>
+                ID: {String(loadedMetadata.id).split(":").pop()}
+              </p>
+              <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 max-h-56 overflow-y-auto space-y-0.5 shadow-inner">
+                {Object.entries(loadedMetadata.data || {}).map(([k, v]) => {
+                  const val = v === null || v === "" || v === undefined ? "-" : typeof v === 'object' ? "{ ... }" : String(v);
+                  return (
+                    <div key={k} className="flex justify-between items-start py-1.5 border-b border-slate-200/60 last:border-0 hover:bg-white rounded transition-colors px-1.5">
+                      <span className="font-semibold text-[10px] text-slate-600 capitalize mr-4 shrink-0 mt-0.5">
+                        {k.replace(/_/g, " ")}
+                      </span>
+                      <span className="font-mono text-[9.5px] font-medium text-slate-800 bg-slate-200/60 px-1.5 py-0.5 rounded text-right break-words max-w-[60%]">
+                        {val}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </section>
@@ -531,16 +545,6 @@ export default function App() {
                     <div className="text-[13px] leading-relaxed">
                       {renderFormattedText(msg.content)}
                     </div>
-                    {msg.role === "assistant" && msg.sql_query ? (
-                      <details className={`mt-3 border-t pt-2 border-slate-300`}>
-                        <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider opacity-70 hover:opacity-100 transition-opacity">
-                          SQL Query
-                        </summary>
-                        <pre className="mt-2 max-h-40 overflow-auto rounded text-left bg-slate-800 p-2 font-mono text-[10px] text-emerald-400 shadow-inner">
-                          {msg.sql_query}
-                        </pre>
-                      </details>
-                    ) : null}
                   </div>
                 </div>
               ))}
