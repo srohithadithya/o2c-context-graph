@@ -52,15 +52,68 @@ _FORBIDDEN_SQL = re.compile(
 
 
 def default_db_path() -> Path:
-    return _PROJECT_ROOT / "o2c_context.db"
+    """
+    Find o2c_context.db with fallback paths for Vercel deployment.
+    Tries: env var (expanded) → project root → parent root → relative from api dir
+    """
+    import os
+    
+    # 1. Explicit env var (expand ~ and relative paths)
+    if env_path := os.environ.get("O2C_DB_PATH"):
+        candidate = Path(env_path).expanduser().resolve()
+        if candidate.is_file():
+            return candidate
+    
+    # 2. Standard project root (local dev)
+    candidate1 = _PROJECT_ROOT / "o2c_context.db"
+    if candidate1.is_file():
+        return candidate1
+    
+    # 3. Vercel: try parent directory (in case __file__ resolves to a nested dir)
+    candidate2 = _PROJECT_ROOT.parent / "o2c_context.db"
+    if candidate2.is_file():
+        return candidate2
+    
+    # 4. Relative from api module's location
+    candidate3 = Path(__file__).resolve().parent.parent / "o2c_context.db"
+    if candidate3.is_file():
+        return candidate3
+    
+    # 5. Absolute from function location in Vercel /var/task structure
+    candidate4 = Path("/var/task/o2c_context.db")
+    if candidate4.is_file():
+        return candidate4
+    
+    # Default to most likely path for error messages
+    return candidate1
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     path = (db_path or default_db_path()).resolve()
+    
+    # Check if file exists before connecting
+    if not path.is_file():
+        candidates = [
+            _PROJECT_ROOT / "o2c_context.db",
+            _PROJECT_ROOT.parent / "o2c_context.db",
+            Path(__file__).resolve().parent.parent / "o2c_context.db",
+            Path("/var/task/o2c_context.db"),
+        ]
+        candidates_str = "\n  ".join(str(c) for c in candidates)
+        raise FileNotFoundError(
+            f"Database file not found at: {path}\n"
+            f"Tried:\n  {candidates_str}\n"
+            f"Set O2C_DB_PATH environment variable to specify location.\n"
+            f"Or run: python -m api.ingest_sqlite to create it from data/raw"
+        )
+    
     uri = f"{path.as_uri()}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.DatabaseError as e:
+        raise RuntimeError(f"Failed to open database at {path}: {e}") from e
 
 
 def schema_digest(conn: sqlite3.Connection, max_tables: int = 40) -> str:

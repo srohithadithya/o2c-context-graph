@@ -77,8 +77,32 @@ class ChatResponse(BaseModel):
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "service": "o2c-context-graph"}
+def health() -> dict[str, Any]:
+    """Health check with database connection status."""
+    result = {"status": "ok", "service": "o2c-context-graph"}
+    
+    # Check database connectivity
+    try:
+        db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
+        result["database_path"] = str(db_path)
+        result["database_exists"] = db_path.is_file()
+        
+        if db_path.is_file():
+            with get_connection(db_path) as conn:
+                # Quick validation: count tables
+                tables = conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchone()[0]
+                result["database_status"] = "connected"
+                result["tables"] = tables
+        else:
+            result["database_status"] = "missing"
+            result["warning"] = "Database file not found. Run ingest_sqlite.py to create it."
+    except Exception as e:
+        result["database_status"] = "error"
+        result["error"] = str(e)[:200]
+    
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -117,12 +141,15 @@ def graph_networkx() -> dict[str, Any]:
     if built.node_count > 0:
         return networkx_graph_to_json(built.graph)
 
-    db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
-    if db_path.is_file():
-        with get_connection(db_path) as conn:
-            payload = build_graph_payload(conn, max_nodes=500)
-        g = networkx_from_sqlite_payload(payload)
-        return networkx_graph_to_json(g)
+    try:
+        db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
+        if db_path.is_file():
+            with get_connection(db_path) as conn:
+                payload = build_graph_payload(conn, max_nodes=500)
+            g = networkx_from_sqlite_payload(payload)
+            return networkx_graph_to_json(g)
+    except (FileNotFoundError, RuntimeError):
+        pass
 
     return {"Nodes": [], "Edges": []}
 
@@ -145,12 +172,26 @@ def graph_data(max_nodes: int = 500) -> dict[str, Any]:
     """
     Force-layout payload from SQLite (order / payment / delivery coloring) for the UI.
     """
-    db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
-    if not db_path.is_file():
-        return {"nodes": [], "links": [], "warning": "o2c_context.db not found"}
-    cap = min(max(1, max_nodes), 500)
-    with get_connection(db_path) as conn:
-        return build_graph_payload(conn, max_nodes=cap)
+    try:
+        db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
+        if not db_path.is_file():
+            return {
+                "nodes": [],
+                "links": [],
+                "warning": (
+                    "Database not found. Either run `python -m api.ingest_sqlite` to create it "
+                    "from data/raw, or set O2C_DB_PATH environment variable to point to o2c_context.db"
+                ),
+            }
+        cap = min(max(1, max_nodes), 500)
+        with get_connection(db_path) as conn:
+            return build_graph_payload(conn, max_nodes=cap)
+    except (FileNotFoundError, RuntimeError) as e:
+        return {
+            "nodes": [],
+            "links": [],
+            "warning": f"Database connection error: {str(e)[:200]}",
+        }
 
 
 @app.get("/api/graph/join-rules")
@@ -168,34 +209,40 @@ def get_node_details(node_id: str) -> dict[str, Any]:
     table, key_str = node_id.split(":", 1)
     
     from .sqlite_graph import _pk_columns
-    db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
-    if not db_path.is_file():
-        raise HTTPException(status_code=404, detail="DB not found")
-        
-    with get_connection(db_path) as conn:
-        existing = {
-            r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            ).fetchall()
-        }
-        if table not in existing:
-            raise HTTPException(status_code=404, detail="Table not found")
+    
+    try:
+        db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
+        if not db_path.is_file():
+            raise HTTPException(status_code=503, detail="Database not found. Run ingest_sqlite.py to create it.")
             
-        pks = _pk_columns(conn, table)
-        if not pks:
-            cur = conn.execute(f'SELECT rowid as _rowid_key, * FROM "{table}" WHERE rowid = ?', (key_str,))
-        else:
-            keys = key_str.split("|")
-            if len(keys) != len(pks):
-                raise HTTPException(status_code=400, detail="Mismatched PK elements")
-            conds = " AND ".join(f'"{c}" = ?' for c in pks)
-            cur = conn.execute(f'SELECT * FROM "{table}" WHERE {conds}', keys)
-            
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Node data not found")
-            
-        return {"id": node_id, "table": table, "data": dict(row)}
+        with get_connection(db_path) as conn:
+            existing = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            }
+            if table not in existing:
+                raise HTTPException(status_code=404, detail="Table not found")
+                
+            pks = _pk_columns(conn, table)
+            if not pks:
+                cur = conn.execute(f'SELECT rowid as _rowid_key, * FROM "{table}" WHERE rowid = ?', (key_str,))
+            else:
+                keys = key_str.split("|")
+                if len(keys) != len(pks):
+                    raise HTTPException(status_code=400, detail="Mismatched PK elements")
+                conds = " AND ".join(f'"{c}" = ?' for c in pks)
+                cur = conn.execute(f'SELECT * FROM "{table}" WHERE {conds}', keys)
+                
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Node data not found")
+                
+            return {"id": node_id, "table": table, "data": dict(row)}
+    except HTTPException:
+        raise
+    except (FileNotFoundError, RuntimeError) as e:
+        raise HTTPException(status_code=503, detail=f"Database error: {str(e)[:100]}") from e
 
 
 # ---------------------------------------------------------------------------
