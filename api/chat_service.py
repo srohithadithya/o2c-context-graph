@@ -48,14 +48,16 @@ def _generate_sql(
     client: Groq,
     user_message: str,
     schema_text: str,
-) -> str:
+) -> tuple[str, str]:
     system_prompt = (
         f"{DODGE_SYSTEM_INSTRUCTION}\n\n"
         f"## Database schema (SQLite)\n{schema_text}\n\n"
         "## Instructions\n"
         "Generate a single read-only SELECT query that answers the user's question.\n"
-        "Respond with a JSON object containing a 'sql_query' key: {\"sql_query\": \"...\"}.\n"
-        "The query must be a single SELECT (no semicolons inside)."
+        "If the user's message is a greeting, 'thank you', 'ok', '...', or out of domain, DO NOT generate SQL.\n"
+        "Respond with a JSON object containing:\n"
+        "1. 'sql_query': The SQL string (leave empty if no data fetch is needed).\n"
+        "2. 'direct_answer': A conversational text reply if and only if 'sql_query' is empty."
     )
     
     resp = client.chat.completions.create(
@@ -69,9 +71,10 @@ def _generate_sql(
     text = resp.choices[0].message.content or "{}"
     data = _parse_json_object(text)
     q = data.get("sql_query", "")
+    da = data.get("direct_answer", "")
     if not isinstance(q, str):
         raise ValueError("Model returned invalid sql_query")
-    return q.strip()
+    return q.strip(), str(da).strip()
 
 
 def _humanize(
@@ -150,10 +153,17 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
             + join_hints_markdown()
         )
         try:
-            sql_query = _generate_sql(client, user_message, schema_text)
+            sql_query, direct_answer = _generate_sql(client, user_message, schema_text)
         except Exception as e:  # noqa: BLE001 — surface model/parse errors as answer
             return {
                 "response": f"I could not generate a valid SQL query: {e}",
+                "sql_query": "",
+                "nodes_to_highlight": [],
+            }
+
+        if not sql_query and direct_answer:
+            return {
+                "response": direct_answer,
                 "sql_query": "",
                 "nodes_to_highlight": [],
             }
