@@ -36,11 +36,17 @@ import sqlite3
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, 'o2c_context.db')
 
-# Fallback for local dev if o2c_context.db is kept at project root instead of api/
+print(f"[VERCEL STARTUP CHECK] Scanning API Directory: {BASE_DIR}")
+try:
+    print(f"[VERCEL CONTENTS] {os.listdir(BASE_DIR)}")
+except Exception as e:
+    print(f"[VERCEL ERROR] Could not read directory: {e}")
+
 if not os.path.exists(DB_PATH):
-    _local_root_db = os.path.join(os.path.dirname(BASE_DIR), 'o2c_context.db')
-    if os.path.exists(_local_root_db):
-        DB_PATH = _local_root_db
+    raise FileNotFoundError(
+        f"CRITICAL FLIGHT CHECK ERROR: o2c_context.db is completely missing in {BASE_DIR}. "
+        f"Please verify your .gitignore hasn't blocked the database from uploading!"
+    )
 
 def get_vercel_db():
     try:

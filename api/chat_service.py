@@ -147,22 +147,12 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DB_PATH = os.path.join(BASE_DIR, 'o2c_context.db')
-    if not os.path.exists(DB_PATH):
-        _local = os.path.join(os.path.dirname(BASE_DIR), 'o2c_context.db')
-        if os.path.exists(_local):
-            DB_PATH = _local
 
     if not os.path.exists(DB_PATH):
-        empty = (
-            f"The O2C SQLite database was not found on Vercel at {DB_PATH}. "
-            "Ensure the file is included in your deployment artifacts."
+        raise FileNotFoundError(
+            f"CRITICAL VERCEL DEPLOYMENT ERROR: o2c_context.db is missing in {BASE_DIR}. "
+            f"Check Vercel Build Logs and verify it isn't ignored in .gitignore!"
         )
-        return {
-            "response": empty,
-            "sql_query": "",
-            "nodes_to_highlight": [],
-        }
-
     import sqlite3
     try:
         db_uri = f"{Path(DB_PATH).as_uri()}?mode=ro"
