@@ -165,7 +165,8 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
 
     import sqlite3
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        db_uri = f"{Path(DB_PATH).as_uri()}?mode=ro"
+        conn = sqlite3.connect(db_uri, uri=True)
         conn.row_factory = sqlite3.Row
     except Exception as e:
         return {
