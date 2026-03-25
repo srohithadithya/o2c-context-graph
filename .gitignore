@@ -11,6 +11,4 @@ __pycache__
 .vercel
 *.log
 .DS_Store
-o2c_context.db
-
 .vercel
