@@ -29,7 +29,7 @@ from .graph_engine import (
 )
 from .graph_mapping import join_paths_as_dicts
 from .ingest import ingest_stats, run_ingest
-from .sqlite_graph import build_graph_payload, networkx_from_sqlite_payload
+from .sqlite_graph import build_graph_payload
 
 import sqlite3
 
