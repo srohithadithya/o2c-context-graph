@@ -145,12 +145,17 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
 
     client = Groq(api_key=key)
 
-    db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
-    if not db_path.is_file():
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    DB_PATH = os.path.join(BASE_DIR, 'o2c_context.db')
+    if not os.path.exists(DB_PATH):
+        _local = os.path.join(os.path.dirname(BASE_DIR), 'o2c_context.db')
+        if os.path.exists(_local):
+            DB_PATH = _local
+
+    if not os.path.exists(DB_PATH):
         empty = (
-            "The O2C SQLite database was not found on the server. "
-            "Ingest data into `o2c_context.db` (see `api/ingest_sqlite.py`) and ensure "
-            "`O2C_DB_PATH` points to it."
+            f"The O2C SQLite database was not found on Vercel at {DB_PATH}. "
+            "Ensure the file is included in your deployment artifacts."
         )
         return {
             "response": empty,
@@ -158,7 +163,18 @@ def run_dodge_chat(user_message: str) -> dict[str, Any]:
             "nodes_to_highlight": [],
         }
 
-    with get_connection(db_path) as conn:
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+    except Exception as e:
+        return {
+            "response": f"Database Failure on Vercel: {str(e)}",
+            "sql_query": "",
+            "nodes_to_highlight": [],
+        }
+
+    with conn:
         schema_text = (
             schema_digest(conn)
             + "\n\n## JOIN KEY RULES (canonical)\n"
