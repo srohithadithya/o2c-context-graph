@@ -29,7 +29,28 @@ from .graph_engine import (
 )
 from .graph_mapping import join_paths_as_dicts
 from .ingest import ingest_stats, run_ingest
-from .sqlite_graph import build_graph_payload, default_db_path, get_connection
+from .sqlite_graph import build_graph_payload, networkx_from_sqlite_payload
+
+import sqlite3
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'o2c_context.db')
+
+# Fallback for local dev if o2c_context.db is kept at project root instead of api/
+if not os.path.exists(DB_PATH):
+    _local_root_db = os.path.join(os.path.dirname(BASE_DIR), 'o2c_context.db')
+    if os.path.exists(_local_root_db):
+        DB_PATH = _local_root_db
+
+def get_vercel_db():
+    try:
+        if not os.path.exists(DB_PATH):
+            raise FileNotFoundError(f"Missing o2c_context.db at {DB_PATH}")
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        raise RuntimeError(f"Database Error: {str(e)}")
 
 # ---------------------------------------------------------------------------
 # App
@@ -83,12 +104,12 @@ def health() -> dict[str, Any]:
     
     # Check database connectivity
     try:
-        db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
+        db_path = Path(DB_PATH)
         result["database_path"] = str(db_path)
         result["database_exists"] = db_path.is_file()
         
         if db_path.is_file():
-            with get_connection(db_path) as conn:
+            with get_vercel_db() as conn:
                 # Quick validation: count tables
                 tables = conn.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -97,10 +118,10 @@ def health() -> dict[str, Any]:
                 result["tables"] = tables
         else:
             result["database_status"] = "missing"
-            result["warning"] = "Database file not found. Run ingest_sqlite.py to create it."
+            result["warning"] = f"Database file not found at {DB_PATH}. Vercel build missing file?"
     except Exception as e:
         result["database_status"] = "error"
-        result["error"] = str(e)[:200]
+        result["error"] = f"Database Error: {str(e)}"
     
     return result
 
@@ -142,16 +163,12 @@ def graph_networkx() -> dict[str, Any]:
         return networkx_graph_to_json(built.graph)
 
     try:
-        db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
-        if db_path.is_file():
-            with get_connection(db_path) as conn:
-                payload = build_graph_payload(conn, max_nodes=500)
-            g = networkx_from_sqlite_payload(payload)
-            return networkx_graph_to_json(g)
-    except (FileNotFoundError, RuntimeError):
-        pass
-
-    return {"Nodes": [], "Edges": []}
+        with get_vercel_db() as conn:
+            payload = build_graph_payload(conn, max_nodes=500)
+        g = networkx_from_sqlite_payload(payload)
+        return networkx_graph_to_json(g)
+    except Exception as e:
+        return {"Nodes": [], "Edges": [], "error": f"Database Error: {str(e)}"}
 
 
 @app.get("/api/graph/summary")
@@ -173,20 +190,16 @@ def graph_data(max_nodes: int = 500) -> dict[str, Any]:
     Force-layout payload from SQLite (order / payment / delivery coloring) for the UI.
     """
     try:
-        db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
-        if not db_path.is_file():
+        if not os.path.exists(DB_PATH):
             return {
                 "nodes": [],
                 "links": [],
-                "warning": (
-                    "Database not found. Either run `python -m api.ingest_sqlite` to create it "
-                    "from data/raw, or set O2C_DB_PATH environment variable to point to o2c_context.db"
-                ),
+                "warning": f"Database missing at {DB_PATH}. Vercel build misconfigured.",
             }
         cap = min(max(1, max_nodes), 500)
-        with get_connection(db_path) as conn:
+        with get_vercel_db() as conn:
             return build_graph_payload(conn, max_nodes=cap)
-    except (FileNotFoundError, RuntimeError) as e:
+    except Exception as e:
         return {
             "nodes": [],
             "links": [],
@@ -211,11 +224,10 @@ def get_node_details(node_id: str) -> dict[str, Any]:
     from .sqlite_graph import _pk_columns
     
     try:
-        db_path = Path(os.environ.get("O2C_DB_PATH", str(default_db_path()))).resolve()
-        if not db_path.is_file():
-            raise HTTPException(status_code=503, detail="Database not found. Run ingest_sqlite.py to create it.")
+        if not os.path.exists(DB_PATH):
+            raise HTTPException(status_code=503, detail=f"Database file is missing natively. Looked at: {DB_PATH}")
             
-        with get_connection(db_path) as conn:
+        with get_vercel_db() as conn:
             existing = {
                 r[0] for r in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -241,7 +253,7 @@ def get_node_details(node_id: str) -> dict[str, Any]:
             return {"id": node_id, "table": table, "data": dict(row)}
     except HTTPException:
         raise
-    except (FileNotFoundError, RuntimeError) as e:
+    except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database error: {str(e)[:100]}") from e
 
 

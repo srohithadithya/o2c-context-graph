@@ -545,14 +545,29 @@ export default function App() {
                     <div className="text-[13px] leading-relaxed">
                       {renderFormattedText(msg.content)}
                     </div>
+                    {msg.role === "assistant" && msg.sql_query && (
+                      <details className="mt-2 text-slate-500 group">
+                        <summary className="cursor-pointer text-[10px] flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity list-none pt-2 border-t border-slate-300">
+                          <svg className="w-3 h-3 group-open:rotate-90 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
+                          Technical Details
+                        </summary>
+                        <pre className="mt-2 max-h-40 overflow-auto rounded bg-slate-800 p-2 font-mono text-[10px] leading-tight text-emerald-400 shadow-inner">
+                          {msg.sql_query}
+                        </pre>
+                      </details>
+                    )}
                   </div>
                 </div>
               ))}
               {sending && (
                 <div className="flex justify-start">
                   <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-slate-200 px-4 py-3 text-[13px] text-slate-900 shadow-sm flex items-center gap-2">
-                    <Spinner className="w-3.5 h-3.5 border-slate-400 border-t-slate-600" />
-                    <span className="font-medium text-slate-500 animate-pulse">Generating answer...</span>
+                    <div className="flex space-x-1 items-center mr-1">
+                      <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce"></div>
+                      <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: "0.2s" }}></div>
+                      <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-bounce" style={{ animationDelay: "0.4s" }}></div>
+                    </div>
+                    <span className="font-medium text-slate-500 ml-1">Thinking...</span>
                   </div>
                 </div>
               )}
