@@ -46,7 +46,8 @@ def get_vercel_db():
     try:
         if not os.path.exists(DB_PATH):
             raise FileNotFoundError(f"Missing o2c_context.db at {DB_PATH}")
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        db_uri = f"{Path(DB_PATH).as_uri()}?mode=ro"
+        conn = sqlite3.connect(db_uri, uri=True)
         conn.row_factory = sqlite3.Row
         return conn
     except Exception as e:
