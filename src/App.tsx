@@ -60,14 +60,14 @@ const CONTEXT_TYPES = [
 type ChatMessage =
   | { role: "user"; content: string }
   | {
-      role: "assistant";
-      content: string;
-      sql_query?: string;
-    }
+    role: "assistant";
+    content: string;
+    sql_query?: string;
+  }
   | {
-      role: "system";
-      content: string;
-    };
+    role: "system";
+    content: string;
+  };
 
 function useResizeObserver(ref: RefObject<HTMLElement | null>) {
   const [size, setSize] = useState({ width: 600, height: 500 });
@@ -93,7 +93,7 @@ function renderFormattedText(text: string) {
     let safeLine = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let html = safeLine.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/`([^`]+)`/g, '<code class="bg-black/10 px-1 py-0.5 rounded text-[11px] font-mono">$1</code>');
-    
+
     if (html.trim().startsWith('- ') || html.trim().startsWith('* ')) {
       return <li key={i} className="ml-5 mb-1 list-disc" dangerouslySetInnerHTML={{ __html: html.trim().substring(2) }} />;
     }
@@ -120,7 +120,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [highlightIds, setHighlightIds] = useState<string[]>([]);
-  
+
   const [loadedMetadata, setLoadedMetadata] = useState<any>(null);
   const [hoverNode, setHoverNode] = useState<string | null>(null);
   const [visibleTypes, setVisibleTypes] = useState<Set<string>>(
@@ -172,33 +172,33 @@ export default function App() {
     const t = node.group || node.type;
     const baseColor = TYPE_COLOR[t] || TYPE_COLOR.entity;
     const color = (hoverNode && !isNeighbor) ? "rgba(203, 213, 225, 0.4)" : baseColor;
-    
+
     const size = isHighlighted || isHovered ? 6 : 4;
-    
+
     ctx.beginPath();
     ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
     ctx.fillStyle = color;
     ctx.fill();
-    
+
     if (isHighlighted || isHovered) {
       ctx.lineWidth = 1.5 / globalScale;
       ctx.strokeStyle = '#334155';
       ctx.stroke();
     }
-    
+
     if (isHovered || isHighlighted) {
       const fontSize = Math.max(12 / globalScale, 2);
       ctx.font = `500 ${fontSize}px Sans-Serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       ctx.fillStyle = isHovered ? '#0f172a' : '#334155';
-      
+
       // Soft background to text to make it readable in dense graphs
       const textWidth = ctx.measureText(node.label).width;
       const bky = node.y + size + Math.max(2 / globalScale, 1);
       ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
-      ctx.fillRect(node.x - textWidth/2 - 2/globalScale, bky - 1/globalScale, textWidth + 4/globalScale, fontSize + 2/globalScale);
-      
+      ctx.fillRect(node.x - textWidth / 2 - 2 / globalScale, bky - 1 / globalScale, textWidth + 4 / globalScale, fontSize + 2 / globalScale);
+
       ctx.fillStyle = isHovered ? '#0f172a' : '#334155';
       ctx.fillText(node.label, node.x, bky);
     }
@@ -299,7 +299,7 @@ export default function App() {
           });
         }
       }
-      
+
       setMessages((m) => [
         ...m,
         {
@@ -350,14 +350,14 @@ export default function App() {
               <span className="text-xs font-bold text-slate-800 tracking-wider uppercase">
                 Interactive Map
               </span>
-              <button 
+              <button
                 onClick={() => fgRef.current?.zoomToFit(400, 20)}
                 className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-600 bg-white border border-slate-300 rounded hover:bg-slate-50 transition-colors shadow-sm"
               >
                 Zoom to Fit
               </button>
             </div>
-            
+
             <div className="flex items-center justify-between mt-1">
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold">
                 <span className="text-slate-400 mr-1 hidden sm:inline-block">Core Flow:</span>
@@ -372,11 +372,10 @@ export default function App() {
                         else next.add(t.id);
                         setVisibleTypes(next);
                       }}
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-all ${
-                        active 
-                          ? "text-slate-800 bg-slate-100 border border-slate-300 shadow-sm" 
-                          : "text-slate-400 bg-transparent hover:bg-slate-50 border border-transparent"
-                      }`}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-all ${active
+                        ? "text-slate-800 bg-slate-100 border border-slate-300 shadow-sm"
+                        : "text-slate-400 bg-transparent hover:bg-slate-50 border border-transparent"
+                        }`}
                     >
                       <span className={`h-2 w-2 rounded-full ${t.color} ${active ? 'shadow-sm' : 'opacity-40 grayscale'}`} />
                       {t.label}
@@ -384,7 +383,7 @@ export default function App() {
                   );
                 })}
               </div>
-              
+
               <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold border-l border-slate-200 pl-3">
                 <span className="text-amber-600/70 mr-1 hidden sm:inline-block">Extended Context:</span>
                 {CONTEXT_TYPES.map(t => {
@@ -398,11 +397,10 @@ export default function App() {
                         else next.add(t.id);
                         setVisibleTypes(next);
                       }}
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-all ${
-                        active 
-                          ? "text-slate-800 bg-amber-50 border border-amber-200 shadow-sm" 
-                          : "text-slate-400 bg-transparent hover:bg-slate-50 border border-transparent"
-                      }`}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded transition-all ${active
+                        ? "text-slate-800 bg-amber-50 border border-amber-200 shadow-sm"
+                        : "text-slate-400 bg-transparent hover:bg-slate-50 border border-transparent"
+                        }`}
                     >
                       <span className={`h-2 w-2 rounded-full ${t.color} ${active ? 'shadow-sm' : 'opacity-40 grayscale'}`} />
                       {t.label}
@@ -504,14 +502,10 @@ export default function App() {
                 Dodge AI
               </h2>
               <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                Ask in natural language. Answers use live SQL on{" "}
-                <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] text-slate-600 font-medium border border-slate-200">
-                  o2c_context.db
-                </code>{" "}
-                and may highlight nodes in the graph.
+                Graph Agent will answer your questions.
               </p>
             </div>
-            <button 
+            <button
               onClick={() => { setMessages([]); setHighlightIds([]); setLoadedMetadata(null); }}
               className="text-xs font-medium text-slate-500 hover:text-red-500 transition-colors bg-slate-100 hover:bg-red-50 px-2 py-1 rounded"
             >
@@ -524,7 +518,7 @@ export default function App() {
               {messages.length === 0 && (
                 <div className="flex flex-col items-center justify-center h-full text-center text-slate-400 space-y-3">
                   <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-300">
-                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                    <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" /></svg>
                   </div>
                   <p className="text-sm font-medium">Try: “How many sales order headers do we have?”</p>
                   <p className="text-xs">Or click a graph node to load metadata and analyze it.</p>
@@ -536,26 +530,14 @@ export default function App() {
                   className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                 >
                   <div
-                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-[13px] leading-relaxed shadow-sm ${
-                      msg.role === "user"
-                        ? "bg-blue-600 text-white rounded-br-sm"
-                        : "bg-slate-200 text-slate-900 rounded-bl-sm"
-                    }`}
+                    className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-[13px] leading-relaxed shadow-sm ${msg.role === "user"
+                      ? "bg-blue-600 text-white rounded-br-sm"
+                      : "bg-slate-200 text-slate-900 rounded-bl-sm"
+                      }`}
                   >
                     <div className="text-[13px] leading-relaxed">
                       {renderFormattedText(msg.content)}
                     </div>
-                    {msg.role === "assistant" && msg.sql_query && (
-                      <details className="mt-2 text-slate-500 group">
-                        <summary className="cursor-pointer text-[10px] flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity list-none pt-2 border-t border-slate-300">
-                          <svg className="w-3 h-3 group-open:rotate-90 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                          Technical Details
-                        </summary>
-                        <pre className="mt-2 max-h-40 overflow-auto rounded bg-slate-800 p-2 font-mono text-[10px] leading-tight text-emerald-400 shadow-inner">
-                          {msg.sql_query}
-                        </pre>
-                      </details>
-                    )}
                   </div>
                 </div>
               ))}
