@@ -1,240 +1,67 @@
-# O2C Context Graph
+# Enterprise Order-to-Cash (O2C) Context Graph & AI Assistant
 
-An interactive, AI-powered Order-to-Cash data explorer. Ingest SAP-style JSONL extracts into a local SQLite database, visualise entity relationships on a force-directed graph, and ask natural-language questions via **Dodge AI** — a Gemini-backed assistant that writes SQL, runs it, and returns human-readable answers with graph highlights.
-
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Browser (React 19 + Vite + Tailwind CSS)                    │
-│  ┌────────────────────────┐  ┌─────────────────────────────┐ │
-│  │  Force-directed graph  │  │  Dodge AI chat panel         │ │
-│  │  (react-force-graph-2d)│  │  NL → SQL → answer + glow   │ │
-│  └────────┬───────────────┘  └──────────┬──────────────────┘ │
-│           │ GET /api/graph/data         │ POST /api/chat     │
-└───────────┼─────────────────────────────┼────────────────────┘
-            ▼                             ▼
-┌──────────────────────────────────────────────────────────────┐
-│  FastAPI  (api/index.py — single Vercel serverless handler)  │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐ │
-│  │ sqlite_graph  │  │ graph_engine │  │ chat_service       │ │
-│  │ (SQL payload) │  │ (NetworkX)   │  │ (Gemini SQL + NL)  │ │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬─────────────┘ │
-│         │                 │                  │               │
-│         ▼                 ▼                  ▼               │
-│  ┌─────────────┐   ┌──────────────┐   ┌──────────────────┐  │
-│  │ o2c_context  │   │ data/raw/*   │   │ Google Gemini    │  │
-│  │   .db        │   │ (19 JSONL    │   │ (gemini-2.0-     │  │
-│  │ (SQLite)     │   │  folders)    │   │  flash)          │  │
-│  └─────────────┘   └──────────────┘   └──────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
-```
+An advanced, Vercel-ready serverless platform integrating a highly interactive **Force-Directed Context Graph** with a **Generative AI Chat Assistant**. This system enables deep logistical exploration of enterprise SAP-style Order-to-Cash pipelines—empowering users to interrogate massive datasets of Sales Orders, Billing Documents, Deliveries, and Payments using natural language.
 
 ---
 
-## Tech Stack
+## 🏗 System Architecture
 
-| Layer     | Technology                                                       |
-| --------- | ---------------------------------------------------------------- |
-| Frontend  | React 19, TypeScript, Vite 6, Tailwind CSS 3, react-force-graph-2d |
-| Backend   | FastAPI, Python 3.9+, Pydantic                                  |
-| Database  | SQLite (file-local, read-only at runtime)                        |
-| AI        | Google Gemini (`google-generativeai`, default model `gemini-2.0-flash`) |
-| Graph     | NetworkX (server-side analysis), react-force-graph-2d (client)   |
-| Deploy    | Vercel Serverless Functions                                      |
+The overarching system architecture was designed under the strict requirement to deliver zero-latency responsiveness within a stateless, cloud-first serverless environment.
 
----
+### 1. Frontend: High-Performance Canvas Graphics
+- **Tech Stack**: React 18, Vite, TypeScript, TailwindCSS.
+- **Rendering Engine**: D3 Force Physics and HTML5 Canvas (`react-force-graph-2d`).
+- **Design Philosophy**: Rather than bogging down the DOM with thousands of native SVG nodes, the application overrides graph rendering using custom Canvas drawing pipelines (`nodeCanvasObject`). The result is a fluid, 60fps interaction experience that gracefully handles highly dense clustered logic maps (Orders natively splitting out into multiple Shipments and Billing legs), micro-animations, Dodge AI node-highlighting, and intelligent data layering.
 
-## Data Model — 19 SAP O2C Entity Tables
-
-The raw data lives as JSONL files under `data/raw/`, one folder per entity. The ingestion pipeline flattens, deduplicates, and writes them into `o2c_context.db`.
-
-```
-Sales Domain          Logistics              Finance / AR           Master Data
-─────────────         ──────────             ──────────────         ───────────
-sales_order_headers   outbound_delivery_     billing_document_      products
-sales_order_items       headers                headers              product_descriptions
-sales_order_          outbound_delivery_     billing_document_      product_plants
-  schedule_lines        items                  items                product_storage_
-                                             billing_document_        locations
-                                               cancellations        plants
-                                             journal_entry_items_   business_partners
-                                               accounts_receivable  business_partner_
-                                             payments_accounts_       addresses
-                                               receivable           customer_company_
-                                                                      assignments
-                                                                    customer_sales_area_
-                                                                      assignments
-```
-
-All join rules are codified in `api/graph_mapping.py` and injected into every Gemini prompt so the AI avoids Cartesian products.
+### 2. Backend: Edge-Ready FastAPI
+- **Tech Stack**: Python 3.10+, FastAPI (ASGI).
+- **Design Philosophy**: The entire backend is stripped down into isolated serverless functions hosted inside `api/index.py` targeting Vercel deployment. Every HTTP endpoint boots instantly and interacts securely with absolute OS paths to generate dynamic, on-demand payloads.
 
 ---
 
-## Project Structure
+## 💽 Database Choice: Embedded SQLite
 
-```
-o2c-context-graph/
-├── api/                         # FastAPI backend (Vercel serverless)
-│   ├── index.py                 #   App entry — all /api/* routes
-│   ├── chat_service.py          #   Dodge AI: NL → SQL → humanized answer
-│   ├── dodge_system.py          #   System persona for Gemini
-│   ├── graph_engine.py          #   NetworkX graph build & serialization
-│   ├── graph_mapping.py         #   19-table join catalog (predicates)
-│   ├── ingest.py                #   JSONL streaming for NetworkX
-│   ├── ingest_sqlite.py         #   JSONL → SQLite ingestion pipeline
-│   ├── sqlite_graph.py          #   SQLite helpers + force-layout payload
-│   ├── bootstrap_env.py         #   .env loader for local dev
-│   └── o2c_schema_knowledge_base.md  # Schema reference
-├── src/                         # React frontend
-│   ├── App.tsx                  #   Main app — graph + Dodge AI panel
-│   ├── main.tsx                 #   React entry point
-│   └── index.css                #   Tailwind directives
-├── data/raw/                    # 19 JSONL entity folders (gitignored DB)
-├── scripts/
-│   └── diagnose_o2c_db.py       # Data health report (row counts, fill rates)
-├── tests/
-│   └── verify_flow.py           # End-to-end Dodge AI integration test
-├── vercel.json                  # Vercel deployment config
-├── vite.config.ts               # Vite + API proxy config
-├── tailwind.config.js           # Tailwind theme (IBM Plex fonts)
-├── requirements.txt             # Python dependencies
-├── package.json                 # Node dependencies
-└── ping_api.py                  # Quick Gemini API connectivity check
-```
+Given the serverless deployment constraint, external cloud databases regularly suffer from cold starts and heavy network latency when interrogated dynamically through AI-synthesized SQL pipelines.
+
+**Why SQLite?**
+1. **Zero-Latency Edge Analytics**: The dataset (19 heavily interconnected SAP logistical tables) is packaged entirely as a single `o2c_context.db` file. We ship the data *alongside* the API, completely eliminating network latency.
+2. **Vercel Lambda Optimization**: Serverless endpoints mount the database natively. To prevent strict Serverless Filesystem write-lock crashes, the database is mounted gracefully over the `uri=True` driver constraint appending the specific `?mode=ro` (Immutable Read-Only) instruction. This guarantees peak stability inside Vercel deployments.
 
 ---
 
-## Getting Started
+## 🧠 LLM Prompting Strategy: The Dodge Engine
 
-### Prerequisites
+The AI logic runs on the blazing-fast Groq Llama 3.3 70B architecture, structurally divided into a precision Two-Step Pipeline (*The Dodge Engine*):
 
-- **Node.js** ≥ 20 LTS
-- **Python** ≥ 3.9
-- A **Google Gemini API key** (for the chat feature)
+### Step 1: Text-to-SQL (Intent translation)
+Instead of feeding raw unstructured data to the LLM, the backend dynamically queries the DB schema and canonical join rules, feeding them to the AI to orchestrate an exact SQL extraction query. If the user asks a conversational question, the AI bypasses the SQL execution logic to prevent unnecessary token consumption and returns a fluid Direct Answer.
 
-### 1. Clone & install
-
-```bash
-git clone https://github.com/srohithadithya/o2c-context-graph.git
-cd o2c-context-graph
-
-# Node
-npm install
-
-# Python
-pip install -r requirements.txt
-```
-
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-# Edit .env and set:
-#   GEMINI_API_KEY=your_key_here
-```
-
-### 3. Ingest data into SQLite
-
-Place your JSONL files under `data/raw/<entity_folder>/` (19 folders), then run:
-
-```bash
-python -m api.ingest_sqlite
-```
-
-This creates `o2c_context.db` at the project root.
-
-### 4. Run the app locally
-
-Start the backend:
-
-```bash
-uvicorn api.index:app --reload --port 8000
-```
-
-Start the frontend (in a separate terminal):
-
-```bash
-npm run dev
-```
-
-Open **http://localhost:5173**. The Vite dev server proxies `/api/*` requests to the FastAPI backend on port 8000.
+### Step 2: Humanization (Data-to-Markdown)
+When the SQLite DB natively executes the extracted query, the JSON output is parsed sequentially back into the Llama 70B engine. The engine acts as an Executive Analyst, processing the raw arrays and transforming them structurally into professional, enterprise-styled Markdown tables, stripping away raw programmatic artifacts, and returning localized `id` payloads to command the UI Force-Graph to highlight specific related nodes natively.
 
 ---
 
-## API Endpoints
+## 🛡️ strict Enterprise Guardrails
 
-| Method | Path                   | Description                                        |
-| ------ | ---------------------- | -------------------------------------------------- |
-| GET    | `/api/health`          | Service health check                               |
-| GET    | `/api/graph/data`      | Force-layout nodes & links from SQLite (for the UI) |
-| GET    | `/api/graph`           | Full NetworkX graph as JSON (JSONL or SQLite)       |
-| GET    | `/api/graph/summary`   | Graph stats (node/edge counts, density, top nodes)  |
-| GET    | `/api/graph/join-rules`| Canonical O2C join predicates                      |
-| GET    | `/api/ingest/stats`    | Folder/file/line counts from `data/raw`            |
-| POST   | `/api/ingest/run`      | Trigger JSONL ingest and return graph summary       |
-| POST   | `/api/chat`            | Send a natural-language question to Dodge AI        |
+Because the engine permits users to execute LLM-synthesized queries against live production datasets, the system employs strict multilayer defensive constraints natively embedded deeply in both Python checks and AI prompt tuning:
 
-### Chat request
-
-```json
-{ "message": "How many sales orders were created in March 2025?" }
-```
-
-### Chat response
-
-```json
-{
-  "response": "There were 42 sales orders created in March 2025.",
-  "sql_query": "SELECT COUNT(*) ...",
-  "nodes_to_highlight": ["sales_order_headers:1234"]
-}
-```
+- **1. Domain Restriction**: The AI persona is hard-locked to Order-to-Cash analysis. If users attempt prompt injection attacks requesting general knowledge, code generation, or unregulated analytics, the AI detects the context shift and strictly politely refuses to engage.
+- **2. Query Safety Validations**: The backend engine evaluates the AST of every synthesized string. Any SQL operations containing destructive intents (`INSERT`, `UPDATE`, `DROP`, `DELETE`, `PRAGMA`) are actively flagged and rejected by the execution runner before connecting to the database.
+- **3. Schema Abstraction**: Internal table architectures and variables (e.g., `business_partners`, `creation_datetime_stamp`) are heavily abstracted. The natural language layer translates technical columns implicitly into clear business english for the user output.
+- **4. Graceful Error Handling**: If a targeted query runs dry, it explicitly prevents standard "Zero Results" panics, actively pivoting into a conversational fallback: *"I couldn't find any records matching that criteria."*
 
 ---
 
-## Scripts & Utilities
+## ⚙️ Environment Variables
+| Variable | Required | Description |
+| -------- | -------- | ----------- |
+| `GROQ_API_KEY` | Yes | Hardware-accelerated LLM API token. |
 
-| Script                         | Purpose                                              |
-| ------------------------------ | ---------------------------------------------------- |
-| `python -m api.ingest_sqlite`  | Ingest JSONL → SQLite (`o2c_context.db`)             |
-| `python scripts/diagnose_o2c_db.py` | Data health: row counts, join-key fill rates, orphan checks |
-| `python tests/verify_flow.py`  | End-to-end test: SQLite → Gemini SQL → answer        |
-| `python ping_api.py`           | Quick Gemini API key connectivity test               |
+## 🚀 Deployment (Vercel)
+The project is natively pre-configured for Vercel. 
+- The `vercel.json` routing configuration automatically maps all `/api/*` requests to the Python serverless endpoints.
+- The `o2c_context.db` physical database file is securely bundled with the deployment and executes securely against Vercel's volatile disk structure using the `?mode=ro` protection.
 
----
+## 📄 License
+Released under the **MIT** License.
 
-## Deployment (Vercel)
-
-The project is pre-configured for Vercel:
-
-- `vercel.json` routes all `/api/*` traffic to the FastAPI handler.
-- Static assets are served from the Vite `dist/` build.
-- `o2c_context.db` is bundled into the serverless function via `includeFiles`.
-- Set `GEMINI_API_KEY` in Vercel → Project → Settings → Environment Variables.
-
-```bash
-npm run build        # Build the frontend
-vercel --prod        # Deploy
-```
-
----
-
-## Environment Variables
-
-| Variable        | Required | Default               | Description                        |
-| --------------- | -------- | --------------------- | ---------------------------------- |
-| `GEMINI_API_KEY` | Yes      | —                     | Google Gemini API key              |
-| `GOOGLE_API_KEY` | No       | —                     | Fallback alias for Gemini key      |
-| `GEMINI_MODEL`   | No       | `gemini-2.0-flash`    | Gemini model ID                    |
-| `O2C_DB_PATH`    | No       | `./o2c_context.db`    | Path to SQLite database            |
-| `O2C_RAW_ROOT`   | No       | `./data/raw`          | Root directory for JSONL data      |
-| `CORS_ORIGINS`   | No       | `*`                   | Comma-separated allowed origins    |
-
----
-
-## License
-
-MIT
