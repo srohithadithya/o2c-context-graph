@@ -117,9 +117,3 @@ Source: SQLite built from `api/ingest_sqlite.py` over `data/raw/**`. Column name
 **Note:** Nested JSON times (e.g. `creationTime` objects) were flattened to `creationTime_hours`, `creationTime_minutes`, `creationTime_seconds` on some tables; combine with `creationDate` in the app layer if a full timestamp is required.
 
 ---
-
-## Query tips
-
-- Prefer joins listed above; avoid joining unrelated tables without shared keys.
-- **ReferenceSdDocument** / **ReferenceSdDocumentItem** on billing and delivery items are the usual bridge to **sales order** lines.
-- **AccountingDocument** + **companyCode** + **fiscalYear** link billing and FI journal lines.
